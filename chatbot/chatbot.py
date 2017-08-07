@@ -26,6 +26,7 @@ import os  # Files management
 import tensorflow as tf
 import numpy as np
 import math
+import reward
 
 from tqdm import tqdm  # Progress bar
 from tensorflow.python import debug as tf_debug
@@ -130,7 +131,7 @@ class Chatbot:
         trainingArgs = parser.add_argument_group('Training options')
         trainingArgs.add_argument('--numEpochs', type=int, default=30, help='maximum number of epochs to run')
         trainingArgs.add_argument('--saveEvery', type=int, default=2000, help='nb of mini-batch step before creating a model checkpoint')
-        trainingArgs.add_argument('--batchSize', type=int, default=256, help='mini-batch size')
+        trainingArgs.add_argument('--batchSize', type=int, default=32, help='mini-batch size')
         trainingArgs.add_argument('--learningRate', type=float, default=0.002, help='Learning rate')
         trainingArgs.add_argument('--dropout', type=float, default=0.9, help='Dropout rate (keep probabilities)')
 
@@ -253,27 +254,27 @@ class Chatbot:
                         self.model.initStatus(nextBatch)
 
                     for i in range(self.args.batchSize):
-                        encodeSentence = [encodeSentences[j][i] for j in self.args.maxLengthEnco]
-                        targetSentence = [targetSentences[j][i] for j in self.args.maxLengthDeco]
-                        decodeSentence = [decodeSentences[j][i] for j in self.args.maxLengthDeco]
+                        encodeSentence = [encodeSentences[j][i] for j in range(self.args.maxLengthEnco)]
+                        targetSentence = [targetSentences[j][i] for j in range(self.args.maxLengthDeco)]
+                        decodeSentence = [decodeSentences[j][i] for j in range(self.args.maxLengthDeco)]
                         for j in range(2 * self.args.maxLengthDeco):
-                            action, timeStep = self.model.getAction(encodeSentence)
+                            actionIndex, step = self.model.getAction(encodeSentence, decodeSentence)
+                            nextDecodeSentence, r = reward.bleuScore(decodeSentence, targetSentence,
+                                                                     actionIndex, step)
+                            loss = self.model.setPerception(encodeSentence, decodeSentence, nextDecodeSentence,
+                                                     actionIndex, step, r)
+                            if loss:
+                                if self.globStep % 100 == 0:
+                                    perplexity = math.exp(float(loss)) if loss < 300 else float("inf")
+                                    tqdm.write("----- Step %d -- Loss %.6f -- Perplexity %.6f" % (
+                                    self.globStep, loss, perplexity))
+                                else:
+                                    print 'training...' + 'epoch: ' + str(e) + ' loss: ' + str(loss)
+                            else:
+                                print 'not training...'
+                            self.globStep += 1
 
 
-                    ops, feedDict = self.model.step(nextBatch)
-                    assert len(ops) == 2  # training, loss
-                    _, loss, summary = sess.run(ops + (mergedSummaries,), feedDict)
-                    self.writer.add_summary(summary, self.globStep)
-                    self.globStep += 1
-
-                    # Output training status
-                    if self.globStep % 100 == 0:
-                        perplexity = math.exp(float(loss)) if loss < 300 else float("inf")
-                        tqdm.write("----- Step %d -- Loss %.2f -- Perplexity %.2f" % (self.globStep, loss, perplexity))
-
-                    # Checkpoint
-                    if self.globStep % self.args.saveEvery == 0:
-                        self._saveSession(sess)
 
                 toc = datetime.datetime.now()
 
